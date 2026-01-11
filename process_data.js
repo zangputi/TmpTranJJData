@@ -111,10 +111,13 @@ async function main() {
         const oldFilePath = path.join(OLD_DATA_DIR, oldFile);
         const oldFileBuffer = fs.readFileSync(oldFilePath);
 
-        // Decode GBK (Assume GBK as per prompt/file check, also handle possible UTF8 if GBK fails or by checking BOM?
-        // Prompt says GBK or UTF8. simple check: if iconv decode gives replacement chars excessively maybe wrong?
-        // But usually stock data on windows is GBK. Let's try GBK first.
-        let fileContent = iconv.decode(oldFileBuffer, 'gbk');
+        // Decode: Try UTF-8 first. If invalid (contains replacement char), assume GBK.
+        // This is robust against input being either UTF-8 or GBK.
+        let fileContent = iconv.decode(oldFileBuffer, 'utf8');
+        if (fileContent.includes('\ufffd')) {
+            // If UTF-8 decode results in replacement characters, it's likely GBK
+            fileContent = iconv.decode(oldFileBuffer, 'gbk');
+        }
 
         // Split lines
         const lines = fileContent.split(/\r?\n/);
@@ -134,7 +137,11 @@ async function main() {
         for (let i = 2; i < lines.length; i++) {
             const line = lines[i];
             if (!line.trim()) {
-                outputLines.push(line);
+                if (i === lines.length - 1) {
+                    // Skip trailing newline
+                } else {
+                    outputLines.push(line);
+                }
                 continue;
             }
 
@@ -147,44 +154,21 @@ async function main() {
             const t = todayData.get(code);
             const y = yesterdayData.get(code);
 
-            // Calculate if both T and T-1 data available (for cross-day or yesterday metrics)
-            // Or just T for today metrics.
-
-            // "异常处理：如果缺少 T-1 日文件或对应代码数据，所有“昨”开头的指标及跨日计算指标均填 0。"
-            // Metrics needing Yesterday: 1, 2, 3, 4, 10
-
             if (y) {
-                // 1. 昨开涨幅: (Yesterday.Open - Yesterday.ExRights) / Yesterday.ExRights * 100
                 if (y.ExRights !== 0) m1 = (y.Open - y.ExRights) / y.ExRights * 100;
-
-                // 2. 昨最低: Yesterday.Low
                 m2 = y.Low;
-
-                // 3. 昨最高: Yesterday.High
                 m3 = y.High;
-
-                // 4. 昨开收盘涨幅: (Yesterday.Close - Yesterday.Open) / Yesterday.ExRights * 100
                 if (y.ExRights !== 0) m4 = (y.Close - y.Open) / y.ExRights * 100;
             }
 
             if (t) {
-                // 5. 开盘涨幅: (Today.Open - Today.ExRights) / Today.ExRights * 100
                 if (t.ExRights !== 0) m5 = (t.Open - t.ExRights) / t.ExRights * 100;
-
-                // 6. 最低价: Today.Low
                 m6 = t.Low;
-
-                // 7. 最高价: Today.High
                 m7 = t.High;
-
-                // 8. 涨幅: (Today.Close - Today.ExRights) / Today.ExRights * 100
                 if (t.ExRights !== 0) m8 = (t.Close - t.ExRights) / t.ExRights * 100;
-
-                // 9. 开收盘涨幅差: (Today.Close - Today.Open) / Today.ExRights * 100
                 if (t.ExRights !== 0) m9 = (t.Close - t.Open) / t.ExRights * 100;
             }
 
-            // 10. 今开核距昨开涨: (Today.Open - Yesterday.Open) / Yesterday.ExRights * 100
             if (t && y) {
                 if (y.ExRights !== 0) m10 = (t.Open - y.Open) / y.ExRights * 100;
             }
@@ -195,11 +179,13 @@ async function main() {
             outputLines.push(line + '\t' + newValues.join('\t'));
         }
 
-        // Write to Output (UTF-8)
-        const outputContent = outputLines.join('\n'); // Standardize newlines
-        // Note: Writing as UTF-8.
-        fs.writeFileSync(path.join(OUTPUT_DIR, oldFile), outputContent, 'utf8');
-        console.log(`Saved ${oldFile} to ${OUTPUT_DIR}`);
+        // Output logic: Ensure output is GBK encoded for compatibility.
+        // Use CRLF (\r\n) for Windows compatibility as the files likely originated there.
+        const outputContent = outputLines.join('\r\n');
+        const outputBuffer = iconv.encode(outputContent, 'gbk');
+
+        fs.writeFileSync(path.join(OUTPUT_DIR, oldFile), outputBuffer);
+        console.log(`Saved ${oldFile} to ${OUTPUT_DIR} (GBK encoded)`);
     }
     console.log("All processed.");
 }
